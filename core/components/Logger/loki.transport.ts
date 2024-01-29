@@ -99,7 +99,6 @@ export class LokiTransport {
         const [promiseFactory, resolvePromise, rejectPromise] = next;
         try {
             this.queueBusy = true;
-            const start = new Date();
             promiseFactory()
                 .then((value) => {
                     this.queueBusy = false;
