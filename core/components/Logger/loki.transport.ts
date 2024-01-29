@@ -63,6 +63,15 @@ type LokiPayload = {
 }
 export class LokiTransport {
     private readonly lokiEndpoint: Url | null = null;
+    private readonly queue: [
+        () => Promise<any>,
+        (resolvedVal: any) => void,
+        (err: any) => void
+    ][] = [];
+
+    private queueBusy = false;
+
+
     constructor() {
         const outputUrl = GetConvar('_tx_loki_endpoint', 'none');
         if (outputUrl != 'none') {
@@ -77,6 +86,45 @@ export class LokiTransport {
                 console.error('Failed to parse Loki connection string, looks like you don\'t know what you are doing. Please turn this feature off by removing the _tx_loki_endpoint convar.');
             }
         }
+    }
+
+    private dequeue() {
+        if (this.queueBusy) {
+            return false;
+        }
+        const next = this.queue.shift();
+        if (!next) {
+            return false;
+        }
+        const [promiseFactory, resolvePromise, rejectPromise] = next;
+        try {
+            this.queueBusy = true;
+            const start = new Date();
+            promiseFactory()
+                .then((value) => {
+                    this.queueBusy = false;
+                    resolvePromise(value);
+                    this.dequeue();
+                })
+                .catch((err) => {
+                    this.queueBusy = false;
+                    rejectPromise(err);
+                    this.dequeue();
+                })
+        } catch (err) {
+            this.queueBusy = false;
+            rejectPromise(err);
+            this.dequeue();
+        }
+        return true;
+    }
+    public enqueue<T extends () => Promise<any>>(
+        factory: T
+    ): Promise<Awaited<ReturnType<T>>> {
+        return new Promise<Awaited<ReturnType<T>>>((res, rej) => {
+            this.queue.push([factory, res, rej]);
+            this.dequeue();
+        });
     }
 
     public sendStdout(rawLogData: string) {
@@ -96,7 +144,7 @@ export class LokiTransport {
     private transport(payload: LokiPayload) {
         const client = this.lokiEndpoint!.protocol == "https:" ? https : http
         const body = Buffer.from(JSON.stringify(payload))
-        const internalPromise = new Promise<string>((resolve, rej) => {
+        const internalPromise = this.enqueue(() => new Promise<string>((resolve, rej) => {
             const req = client.request({
                 hostname: this.lokiEndpoint!.hostname,
                 port: this.lokiEndpoint!.protocol == "https:" ? 443 : 80,
@@ -111,7 +159,7 @@ export class LokiTransport {
             req.on('error', rej)
             req.write(body)
             req.end()
-        })
+        }))
 
         internalPromise.catch(err => console.error("Failed to send log to Loki", err))
         internalPromise.then((r) => {
