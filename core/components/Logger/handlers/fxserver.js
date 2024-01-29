@@ -1,3 +1,5 @@
+import {LokiTransport} from "@core/components/Logger/loki.transport.js";
+
 const modulename = 'Logger:FXServer';
 import bytes from 'bytes';
 import chalk from 'chalk';
@@ -65,6 +67,7 @@ export default class FXServerLogger extends LoggerBase {
         this.recentBuffer = '';
         this.recentBufferMaxSize = 256 * 1024; //kb
         this.recentBufferTrimSliceSize = 32 * 1024; //how much will be cut when overflows
+        this.loki = new LokiTransport();
     }
 
 
@@ -122,11 +125,17 @@ export default class FXServerLogger extends LoggerBase {
     writeStdIO(type, data) {
         //To file
         this.lrStream.write(data.replace(regexColors, ''));
-
         //Removing console-breaking chars
         const consoleData = data
             .replace(regexConsole, '')
             .replace(regexCsi, '');
+
+        if (type === 'stdout') {
+            this.loki.sendStdout(consoleData);
+        } else {
+            this.loki.sendStdErr(consoleData);
+        }
+
 
         //For the terminal
         if (!globals.fxRunner.config.quiet) {
